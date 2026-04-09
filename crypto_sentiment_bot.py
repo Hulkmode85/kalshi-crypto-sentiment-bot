@@ -47,6 +47,23 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from risk_guard import RiskManager
 
 load_dotenv()
+
+# ── Shadow Logging ────────────────────────────────────────────────────────────
+SHADOW_LOG_FILE = os.getenv("SHADOW_LOG_FILE", "shadow_log.jsonl")
+
+def shadow_log(opportunity: dict, taken: bool, reason: str = ""):
+    entry = {"ts": time.time(), "taken": taken, "reason": reason, **opportunity}
+    try:
+        with open(SHADOW_LOG_FILE, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except:
+        pass
+
+# ── Multi-strike: scan ALL strikes per event/series, not just one ────────────
+MULTI_STRIKE = os.getenv("MULTI_STRIKE", "true").lower() == "true"
+# When fetching markets, iterate through ALL contracts in each series/event
+# and evaluate each strike independently. No single-ticker filtering.
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
