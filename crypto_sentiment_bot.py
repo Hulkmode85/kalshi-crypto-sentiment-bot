@@ -84,7 +84,9 @@ class Config:
     FUNDING_RATE_LOW:       float  = float(os.getenv("FUNDING_RATE_LOW", "-0.0005"))  # -0.05%/8hr = oversold
 
     MIN_EDGE:               float = float(os.getenv("MIN_EDGE", "0.07"))
+    MAKER_FEE:              float = float(os.getenv("MAKER_FEE", "0.0175"))
     BET_SIZE_USD:           float = float(os.getenv("BET_SIZE_USD", "12.0"))
+    KELLY_FRACTION:         float = float(os.getenv("KELLY_FRACTION", "1.0"))
     MAX_OPEN_POSITIONS:     int   = int(os.getenv("MAX_OPEN_POSITIONS", "6"))
     MIN_PRICE:              int   = int(os.getenv("MIN_PRICE", "15"))
     MAX_PRICE:              int   = int(os.getenv("MAX_PRICE", "85"))
@@ -401,9 +403,17 @@ def find_trade(
             continue
 
         edge = confidence - (price / 100)
+        ev_after_fees = edge - Config.MAKER_FEE
+        if ev_after_fees <= 0:
+            log.info(f"[FIND_TRADE] {market.ticker}: negative EV after {Config.MAKER_FEE*100}% fee (edge={edge:.1%})")
+            continue
         if edge >= Config.MIN_EDGE:
-            contracts = max(1, int(Config.BET_SIZE_USD * 100 / price))
-            log.info(f"[FIND_TRADE] MATCH {market.ticker}: {side} @ {price}¢, edge={edge:.0%}")
+            # Kelly criterion: f* = (model_prob - market_prob) / (1 - market_prob)
+            market_prob = price / 100
+            kelly_f = max(0, (confidence - market_prob) / (1 - market_prob)) if market_prob < 1 else 0
+            kelly_bet = max(1, min(Config.PAPER_BALANCE * kelly_f * Config.KELLY_FRACTION, Config.BET_SIZE_USD * 5))
+            contracts = max(1, int(kelly_bet * 100 / price))
+            log.info(f"[FIND_TRADE] MATCH {market.ticker}: {side} @ {price}¢, edge={edge:.0%} kelly_f={kelly_f:.3f}")
             return market, side, price, contracts
         else:
             log.info(f"[FIND_TRADE] {market.ticker}: edge {edge:.1%} < min {Config.MIN_EDGE:.1%}")
