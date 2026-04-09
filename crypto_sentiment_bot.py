@@ -60,6 +60,34 @@ def shadow_log(opportunity: dict, taken: bool, reason: str = ""):
         pass
 
 # ── Multi-strike: scan ALL strikes per event/series, not just one ────────────
+
+# ─── Regime Detection — pause trading during extreme volatility ────────────
+import statistics as _stats
+
+REGIME_WINDOW = int(os.getenv("REGIME_WINDOW", "20"))
+REGIME_THRESHOLD = float(os.getenv("REGIME_THRESHOLD", "3.0"))
+_regime_prices: list[float] = []
+
+def check_regime(price: float) -> str:
+    """Returns 'CALM', 'ELEVATED', or 'CRASH'. Skip trades during CRASH."""
+    _regime_prices.append(price)
+    if len(_regime_prices) > REGIME_WINDOW:
+        _regime_prices.pop(0)
+    if len(_regime_prices) < 5:
+        return "CALM"
+    rets = [(b - a) / a for a, b in zip(_regime_prices[:-1], _regime_prices[1:])]
+    if not rets:
+        return "CALM"
+    mu = _stats.mean(rets)
+    sd = _stats.stdev(rets) if len(rets) > 1 else 0.01
+    z = abs(rets[-1] - mu) / max(sd, 0.0001)
+    if z > REGIME_THRESHOLD:
+        return "CRASH"
+    elif z > REGIME_THRESHOLD * 0.6:
+        return "ELEVATED"
+    return "CALM"
+
+
 MULTI_STRIKE = os.getenv("MULTI_STRIKE", "true").lower() == "true"
 # When fetching markets, iterate through ALL contracts in each series/event
 # and evaluate each strike independently. No single-ticker filtering.
@@ -432,6 +460,12 @@ def find_trade(
             kelly_bet = max(1, min(Config.PAPER_BALANCE * kelly_f * Config.KELLY_FRACTION, Config.BET_SIZE_USD * 5))
             contracts = max(1, int(kelly_bet * 100 / price))
             log.info(f"[FIND_TRADE] MATCH {market.ticker}: {side} @ {price}¢, edge={edge:.0%} kelly_f={kelly_f:.3f}")
+            # ── Regime detection ──
+            regime = check_regime(float(price))
+            if regime == "CRASH":
+                log.warning("REGIME CRASH on kalshi_crypto_sentiment_bot — skipping trade")
+                shadow_log({"bot": "kalshi_crypto_sentiment_bot", "regime": regime}, taken=False, reason="crash regime")
+                return
             shadow_log({"bot": "crypto_sentiment", "ticker": market.ticker, "coin": coin, "side": side, "price": price, "edge": edge, "contracts": contracts}, taken=True)
             return market, side, price, contracts
         else:
