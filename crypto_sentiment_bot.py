@@ -423,6 +423,7 @@ def find_trade(
         ev_after_fees = edge - Config.MAKER_FEE
         if ev_after_fees <= 0:
             log.info(f"[FIND_TRADE] {market.ticker}: negative EV after {Config.MAKER_FEE*100}% fee (edge={edge:.1%})")
+            shadow_log({"bot": "crypto_sentiment", "ticker": market.ticker, "coin": coin, "side": side, "price": price, "edge": edge}, taken=False, reason="negative EV after fees")
             continue
         if edge >= Config.MIN_EDGE:
             # Kelly criterion: f* = (model_prob - market_prob) / (1 - market_prob)
@@ -431,6 +432,7 @@ def find_trade(
             kelly_bet = max(1, min(Config.PAPER_BALANCE * kelly_f * Config.KELLY_FRACTION, Config.BET_SIZE_USD * 5))
             contracts = max(1, int(kelly_bet * 100 / price))
             log.info(f"[FIND_TRADE] MATCH {market.ticker}: {side} @ {price}¢, edge={edge:.0%} kelly_f={kelly_f:.3f}")
+            shadow_log({"bot": "crypto_sentiment", "ticker": market.ticker, "coin": coin, "side": side, "price": price, "edge": edge, "contracts": contracts}, taken=True)
             return market, side, price, contracts
         else:
             log.info(f"[FIND_TRADE] {market.ticker}: edge {edge:.1%} < min {Config.MIN_EDGE:.1%}")
