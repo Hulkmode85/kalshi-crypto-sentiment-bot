@@ -44,6 +44,7 @@ import httpx
 from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from risk_guard import RiskManager
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -489,6 +490,7 @@ def main():
     sent_client = SentimentClient()
     kalshi = KalshiClient()
     ledger = PaperLedger()
+    risk_manager = RiskManager(starting_balance=Config.PAPER_BALANCE)
     _bot_stats['balance'] = ledger.balance
     threading.Thread(target=_run_stats_server, daemon=True).start()
 
@@ -522,6 +524,23 @@ def main():
                     if result:
                         market, side, price, contracts = result
                         log.info(f"[TRADE] {direction} signal → {side} {market.ticker} @ {price}¢")
+
+                        # Risk guard check
+                        if not Config.PAPER_MODE:
+                            allowed, reason, capped = risk_manager.pre_trade_check(
+                                coin, price, contracts, side.lower(),
+                                bot_name="crypto-sentiment-bot")
+                            if not allowed:
+                                log.warning(f"Risk guard blocked: {reason}")
+                                continue
+                            contracts = capped or contracts
+                        else:
+                            allowed, reason, capped = risk_manager.pre_trade_check(
+                                coin, price, contracts, side.lower(),
+                                bot_name="crypto-sentiment-bot")
+                            if not allowed:
+                                log.info(f"[PAPER] Risk guard would block: {reason}")
+
                         if Config.PAPER_MODE:
                             if ledger.open_position(market.ticker, side, price, contracts,
                                                      coin, direction, sentiment.fear_greed_index):
