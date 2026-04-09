@@ -31,6 +31,8 @@ Data Sources (all free):
 
 import os
 import time
+from flask import Flask, jsonify
+import threading
 import json
 import logging
 import uuid
@@ -70,7 +72,7 @@ def _normalize_market(m: dict) -> dict:
 
 class Config:
     PAPER_MODE:             bool  = os.getenv("PAPER_MODE", "true").lower() == "true"
-    PAPER_BALANCE:          float = float(os.getenv("PAPER_BALANCE", "1000"))
+    PAPER_BALANCE:          float = float(os.getenv("PAPER_BALANCE", "5000"))
     KALSHI_API_KEY:         str   = os.getenv("KALSHI_API_KEY", "")
     KALSHI_KEY_ID:          str   = os.getenv("KALSHI_KEY_ID", "")
 
@@ -452,6 +454,27 @@ class PaperLedger:
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
 
+# ── Stats HTTP server ─────────────────────────────────────────────────────────
+_stats_app = Flask(__name__)
+_bot_stats = {"trades": 0, "wins": 0, "pnl": 0.0, "balance": 0.0, "start": time.time()}
+
+@_stats_app.route("/stats")
+def _stats_endpoint():
+    t = _bot_stats
+    total = t["trades"]
+    return jsonify({"bot": "kalshi-crypto-sentiment-bot", "paper_mode": True,
+        "balance": t["balance"], "trades": total, "wins": t["wins"],
+        "losses": total - t["wins"], "win_rate": round(t["wins"]/max(total,1), 4),
+        "pnl": t["pnl"], "uptime_hours": round((time.time()-t["start"])/3600, 2)})
+
+@_stats_app.route("/health")
+def _health_endpoint():
+    return jsonify({"status": "ok"})
+
+def _run_stats_server():
+    _stats_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+
 def main():
     log.info("=" * 60)
     log.info("Kalshi Crypto Sentiment Bot starting")
@@ -466,6 +489,8 @@ def main():
     sent_client = SentimentClient()
     kalshi = KalshiClient()
     ledger = PaperLedger()
+    _bot_stats['balance'] = ledger.balance
+    threading.Thread(target=_run_stats_server, daemon=True).start()
 
     cycle = 0
     while True:
@@ -510,6 +535,10 @@ def main():
             log.error(f"Main loop error: {e}", exc_info=True)
 
         open_count = len(ledger.open_positions)
+        _bot_stats['balance'] = ledger.balance
+        _bot_stats['trades'] = sum(1 for t in ledger.trades if t['action'] == 'OPEN')
+        _bot_stats['wins'] = sum(1 for t in ledger.trades if t['action'] == 'CLOSE' and t.get('pnl', 0) > 0)
+        _bot_stats['pnl'] = sum(t.get('pnl', 0) for t in ledger.trades if t['action'] == 'CLOSE')
         closed_pnl = sum(t.get("pnl", 0) for t in ledger.trades if t["action"] == "CLOSE")
         total_opened = sum(1 for t in ledger.trades if t["action"] == "OPEN")
         log.info(f"[SUMMARY] Balance=${ledger.balance:.2f} | Open={open_count} | "
